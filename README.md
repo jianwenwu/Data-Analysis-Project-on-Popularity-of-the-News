@@ -64,4 +64,6 @@ Number of Attributes: 61 (58 predictive attributes, 2 non-predictive, 1 goal fie
 57. title_sentiment_polarity: Title polarity 
 58. abs_title_subjectivity: Absolute subjectivity level 
 59. abs_title_sentiment_polarity: Absolute polarity level 
-60. shares: Number of shares (target)
+60. shares: Number of shares (target
+
+#
