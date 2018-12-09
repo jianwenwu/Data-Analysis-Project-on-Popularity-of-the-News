@@ -1,0 +1,299 @@
+---
+title: "Wine_Quality_Predictions"
+author: "jianwen wu"
+date: "12/2/2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+```{r, echo=F, warning=F, message=F, results='hide'}
+library(tidyverse)
+library(tidyquant)
+library(stringr)
+library(forcats)
+library(stringr)
+library(forcats)
+library(cowplot)
+library(fs)
+library(tidyverse)
+library(h2o)
+source(file = "wine_functions.R")
+
+h2o.init(max_mem_size = "5g")
+
+# Load Data
+wine_train_orginal <- read_csv("Data/original/train_data.csv")
+
+h2o.no_progress()
+
+#rename the training and validation data
+wine_train_orginal <- rename_wine(wine_train_orginal)
+```
+
+
+## Introduction
+
+  In this project, We are going to analyzing the data set Wine Quality from University of California, Irvine Machine Learning Repository. This data was collected by Paulo Cortez from University of Minho, Guimarães, Portuga.  There are two type of wine in the data set, which are red wine and white wine. Based on the 12 features of red and white wine, we are also going to use Machine Learning Algorithms to predict the quality of wine.
+  
+  
+## Description of Data
+
+The data contains 4547 oberservations with 12 features and 1 outcome variable. Also, the data has two missing value in feature total_sulfur_dioxide.
+
+
+**Features** :
+
+* **wine type** - 1096 Red and 3451 White wine
+
+* **fixed acidity** - Most acids involved with wine or fixed or nonvolatile
+
+* **volatile acidity** - The amount of acetic acid in wine, which at too high of levels can lead to an unpleasant, vinegar taste
+
+* **citric acid** - the amount of acetic acid in wine, which at too high of levels can lead to an unpleasant, vinegar taste 
+
+* **residual sugar** - The amount of sugar remaining after fermentation stops, it's rare to find wines with less than 1 gram/liter and wines with greater than 45 grams/liter are considered sweet 
+
+* **chlorides** - The amount of salt in the wine 
+
+* **free sulfur dioxide** - The free form of SO2 exists in equilibrium between molecular SO2 (as a dissolved gas) and bisulfite ion; it prevents microbial growth and the oxidation of wine 
+
+* **total sulfur dioxide** - Amount of free and bound forms of S02; in low concentrations, SO2 is mostly undetectable in wine, but at free SO2 concentrations over 50 ppm, SO2 becomes evident in the nose and taste of wine 
+
+* **density** - the density of water is close to that of water depending on the percent alcohol and sugar content
+
+* **pH** - Describes how acidic or basic a wine is on a scale from 0 (very acidic) to 14 (very basic); most wines are between 3-4 on the pH scale 
+
+* **sulphates** - a wine additive which can contribute to sulfur dioxide gas (S02) levels, wich acts as an antimicrobial and antioxidant
+
+* **alcohol** - the percent alcohol content of the wine
+
+**Outcome variable**: 
+
+* **quality** - score between 0 and 10
+
+
+```{r,echo=FALSE}
+knitr::kable(wine_train_orginal[1:5,], format="latex", booktabs = T, caption = "The first 5 rows") %>% 
+     kableExtra::kable_styling(latex_options="scale_down")
+```
+
+
+
+##### Histogram of features and outcome variable
+```{r}
+wine_train_orginal %>%
+  select(-wine_type) %>%
+  na.omit() %>% #remove the missing values
+  plot_hist_facet(ncol = 4)
+```
+The distributions of citric acid, total sulfur dioxide, and pH are nearly normally distributed. The distributions of fixed acidity, volatile acidity, residual sugar, sulphates, and alcohol are right skewed. The distributions for chlorides, free sulfur dioxide, density, and quality have unknown distributions. Based on the histograms, we might need to normalize or standardize the features that have right skewed or unknown distributions for prediction. 
+
+##### Correlation Plot
+```{r}
+wine_train_orginal %>%
+  select(-wine_type) %>%
+  plot_cor(target = quality)
+```
+Based on the correlation plot, the feature alcohol has the strongest positive correlation to the outcome variable quality(0.43) among these 11 numerical features. The features volatile acidity has the second strongest negative correlation to the outcome variable quality(-0.27).  The rest of features either has very low positive or negative correlations to the outcome variable quality.
+
+
+Since alcohol has the strongest correction to wine quality, we plot a scatter plot below.
+```{r}
+wine_train_orginal %>%
+  ggplot(aes(x = alcohol, y = quality)) +
+  geom_jitter() + #add some variations to outcome variables.
+  geom_smooth(method = "lm")
+```
+The scatter plot above did not show a very strong correlation. Our assumption is linear regression would not be best model to predict wine quality. 
+
+
+## Methods and Results
+
+Since our outcome variable quality is numerical, we are going to use the following Machine Learning Algorithms(Regression) to predict the wine quality:
+
+* Linear Regression
+* Ridge Regression
+* Lasso Regression
+* Ensemble Methods - Random Forest and Gradient Boosting Machines 
+
+We will split the data into 85% training and 15% validation.The validation set is used for model 
+selection.
+```{r, message=F, warning=F, results='hide'}
+#Precessing 
+pre_processing <- function(data){
+  data %>%
+    mutate(wine_type = as.factor(wine_type)) %>% 
+    na.omit() #remove the missing values
+            
+}
+
+wine_train_orginal <- pre_processing(wine_train_orginal)
+
+set.seed(12)
+
+split_h2o <- h2o.splitFrame(as.h2o(wine_train_orginal), ratios = c(0.85), seed = 1234)
+
+wine_train_h2o <- split_h2o[[1]]
+wine_valid_h2o <- split_h2o[[2]]
+```
+
+##### linear Regression
+```{r}
+y <- "quality"
+x <- setdiff(names(wine_train_h2o), y)
+
+wine_lm <- h2o.glm(
+  training_frame = wine_train_h2o,
+  validation_frame = wine_valid_h2o,
+  x = x,
+  y = y,
+  lambda = 0, #no regualation
+  seed = 123
+  )
+
+
+get_metrics_lm(model = wine_lm)
+```
+
+
+##### Lasso and Ridge - Perform the grid search to find best lambda, aslo standarized the features.
+```{r}
+#alpha = 0 for ridge regression
+#alpha = 1 for lasso
+
+glm_params <- list(lambda = 10^seq(10, -2, length.out  = 100),
+                   alpha = c(0,1))
+
+glm_grid <- h2o.grid("glm", 
+                      x = x, 
+                      y = y,
+                      training_frame = wine_train_h2o,
+                      validation_frame = wine_valid_h2o,
+                      hyper_params = glm_params,
+                      standardize = T,
+                      seed = 12)
+
+glm_grid_metrics<- h2o.getGrid(grid_id = glm_grid@grid_id,
+                             sort_by = "mse",
+                             decreasing = F)
+best_model_glm <- h2o.getModel(glm_grid_metrics@model_ids[[1]])
+get_metrics_lm(model =  best_model_glm)
+```
+
+
+##### GBM 
+```{r}
+wine_gbm <- h2o.gbm(
+  x = x,
+  y = y,
+  training_frame = wine_train_h2o,
+  validation_frame = wine_valid_h2o,
+  seed = 123,
+  model_id = "wine_gbm",
+  ntrees = 500,
+  max_depth = 10
+)
+
+get_metrics_tree(wine_gbm)
+
+#grid search find best combination for number of tress and
+#maximum of depth.
+parameters_gbm <- list(
+  ntrees = c(50,100,200),
+  max_depth = c(5,8,10,15))
+
+grid_gbm <- h2o.grid(grid_id = "gbm_TUNE",
+                    "gbm", 
+                    hyper_params = parameters_gbm,
+                    y = y, 
+                    x = x,
+                    training_frame = wine_train_h2o,
+                    validation_frame = wine_valid_h2o,
+                    seed = 123
+                    )
+
+gbm_sorted_grid <- h2o.getGrid(grid_id = "gbm_TUNE", sort_by = "mse")
+
+best_model_gbm <- h2o.getModel(gbm_sorted_grid@model_ids[[1]])
+
+get_metrics_tree(model = best_model_gbm)
+
+```
+
+
+
+##### Random Forest
+```{r}
+wine_rf <- h2o.randomForest(
+  x = x[-1],
+  y = y,
+  training_frame = wine_train_h2o,
+  validation_frame = wine_valid_h2o,
+  seed = 123,
+  model_id = "wine_rf",
+  ntrees = 500,
+  max_depth = 10
+)
+
+get_metrics_tree(model = wine_rf)
+
+#grid search find best combination for number of tress and
+#maximum of depth.
+
+parameters_rf <- list(
+  ntrees = c(100,200,300,500,600),
+  max_depth = c(15,20,25,30))
+
+grid_rf <- h2o.grid(grid_id = "RF_TUNE",
+                    "randomForest", 
+                    hyper_params = parameters_rf,
+                    y = y, 
+                    x = x,
+                    training_frame = wine_train_h2o,
+                    validation_frame = wine_valid_h2o,
+                    seed = 123
+                    )
+
+rf_sorted_grid <- h2o.getGrid(grid_id = "RF_TUNE", sort_by = "mse")
+
+best_model_rf <- h2o.getModel(rf_sorted_grid@model_ids[[1]])
+
+get_metrics_tree(model = best_model_rf)
+
+```
+
+
+
+## Dicussion
+```{r}
+tibble(model = factor(c("LM", "LM_Tune", "RF", "RF_Tune", "GBM", "GBM_Tune")),
+       train_mse = c(h2o.mse(wine_lm, train = T), 
+                       h2o.mse(best_model_glm, train = T),
+                       h2o.mse(wine_rf, train = T),
+                       h2o.mse(best_model_rf, train = T),
+                       h2o.mse(wine_gbm, train = T),
+                       h2o.mse(best_model_gbm, train = T)
+                       ),
+       validation_mse = c(h2o.mse(wine_lm, valid = T), 
+                       h2o.mse(best_model_glm, valid =T),
+                       h2o.mse(wine_rf, valid = T),
+                       h2o.mse(best_model_rf, valid = T),
+                       h2o.mse(wine_gbm, valid = T),
+                       h2o.mse(best_model_gbm, valid = T))
+) %>%
+  gather(`train_mse`, `validation_mse`,key = "key", value = "value") %>%
+  
+  ggplot(aes(x = model, y = value)) +
+  geom_col(fill = "red") +
+  facet_grid(key ~.)
+
+
+```
+
+##### Variables Importance
+
+```{r}
+h2o.varimp_plot(best_model_rf)
+```
+
